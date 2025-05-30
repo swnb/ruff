@@ -672,6 +672,10 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         ["airflow", "operators", "subdag", ..] => {
             Replacement::Message("The whole `airflow.subdag` module has been removed.")
         }
+        ["airflow", "operators", "python", "get_current_context"] => Replacement::AutoImport {
+            module: "airflow.sdk",
+            name: "get_current_context",
+        },
 
         // airflow.secrets
         ["airflow", "secrets", "local_filesystem", "load_connections"] => Replacement::AutoImport {
@@ -705,11 +709,6 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         ["airflow", "utils", rest @ ..] => match &rest {
             // airflow.utils.dag_cycle_tester
             ["dag_cycle_tester", "test_cycle"] => Replacement::None,
-
-            // airflow.utils.dag_parsing_context
-            ["dag_parsing_context", "get_parsing_context"] => {
-                Replacement::Name("airflow.sdk.get_parsing_context")
-            }
 
             // airflow.utils.db
             ["db", "create_session"] => Replacement::None,
@@ -866,10 +865,6 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         _ => return,
     };
 
-    if is_guarded_by_try_except(expr, &replacement, semantic) {
-        return;
-    }
-
     let mut diagnostic = Diagnostic::new(
         Airflow3Removal {
             deprecated: qualified_name.to_string(),
@@ -877,8 +872,15 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         },
         range,
     );
-
-    if let Replacement::AutoImport { module, name } = replacement {
+    let semantic = checker.semantic();
+    if let Some((module, name)) = match &replacement {
+        Replacement::AutoImport { module, name } => Some((module, *name)),
+        Replacement::SourceModuleMoved { module, name } => Some((module, name.as_str())),
+        _ => None,
+    } {
+        if is_guarded_by_try_except(expr, module, name, semantic) {
+            return;
+        }
         diagnostic.try_set_fix(|| {
             let (import_edit, binding) = checker.importer().get_or_import_symbol(
                 &ImportRequest::import_from(module, name),

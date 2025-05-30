@@ -194,9 +194,10 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
 
     let replacement = match qualified_name.segments() {
         // airflow.datasets.metadata
-        ["airflow", "datasets", "metadata", "Metadata"] => {
-            Replacement::Name("airflow.sdk.Metadata")
-        }
+        ["airflow", "datasets", "metadata", "Metadata"] => Replacement::AutoImport {
+            module: "airflow.sdk",
+            name: "Metadata",
+        },
         // airflow.datasets
         ["airflow", "Dataset"] | ["airflow", "datasets", "Dataset"] => Replacement::AutoImport {
             module: "airflow.sdk",
@@ -204,10 +205,22 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         },
         ["airflow", "datasets", rest] => match *rest {
             "DatasetAliasEvent" => Replacement::None,
-            "DatasetAlias" => Replacement::Name("airflow.sdk.AssetAlias"),
-            "DatasetAll" => Replacement::Name("airflow.sdk.AssetAll"),
-            "DatasetAny" => Replacement::Name("airflow.sdk.AssetAny"),
-            "expand_alias_to_datasets" => Replacement::Name("airflow.sdk.expand_alias_to_assets"),
+            "DatasetAlias" => Replacement::AutoImport {
+                module: "airflow.sdk",
+                name: "AssetAlias",
+            },
+            "DatasetAll" => Replacement::AutoImport {
+                module: "airflow.sdk",
+                name: "AssetAll",
+            },
+            "DatasetAny" => Replacement::AutoImport {
+                module: "airflow.sdk",
+                name: "AssetAny",
+            },
+            "expand_alias_to_datasets" => Replacement::AutoImport {
+                module: "airflow.sdk",
+                name: "expand_alias_to_assets",
+            },
             _ => return,
         },
 
@@ -229,15 +242,24 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
             name: "attach".to_string(),
         },
 
+        // airflow.models
+        ["airflow", "models", rest @ ("Connection" | "Variable")] => {
+            Replacement::SourceModuleMoved {
+                module: "airflow.sdk",
+                name: (*rest).to_string(),
+            }
+        }
+
         // airflow.models.baseoperator
         ["airflow", "models", "baseoperator", rest] => match *rest {
             "chain" | "chain_linear" | "cross_downstream" => Replacement::SourceModuleMoved {
                 module: "airflow.sdk",
                 name: (*rest).to_string(),
             },
-            "BaseOperatorLink" => {
-                Replacement::Name("airflow.sdk.definitions.baseoperatorlink.BaseOperatorLink")
-            }
+            "BaseOperatorLink" => Replacement::AutoImport {
+                module: "airflow.sdk.definitions.baseoperatorlink",
+                name: "BaseOperatorLink",
+            },
             _ => return,
         },
         // airflow.model..DAG
@@ -246,20 +268,20 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
             name: "DAG".to_string(),
         },
         // airflow.timetables
-        ["airflow", "timetables", "datasets", "DatasetOrTimeSchedule"] => {
-            Replacement::Name("airflow.timetables.assets.AssetOrTimeSchedule")
-        }
+        ["airflow", "timetables", "datasets", "DatasetOrTimeSchedule"] => Replacement::AutoImport {
+            module: "airflow.timetables.assets",
+            name: "AssetOrTimeSchedule",
+        },
         // airflow.utils
         ["airflow", "utils", "dag_parsing_context", "get_parsing_context"] => {
-            Replacement::Name("airflow.sdk.get_parsing_context")
+            Replacement::AutoImport {
+                module: "airflow.sdk",
+                name: "get_parsing_context",
+            }
         }
 
         _ => return,
     };
-
-    if is_guarded_by_try_except(expr, &replacement, semantic) {
-        return;
-    }
 
     let mut diagnostic = Diagnostic::new(
         Airflow3SuggestedUpdate {
@@ -269,7 +291,15 @@ fn check_name(checker: &Checker, expr: &Expr, range: TextRange) {
         range,
     );
 
-    if let Replacement::AutoImport { module, name } = replacement {
+    let semantic = checker.semantic();
+    if let Some((module, name)) = match &replacement {
+        Replacement::AutoImport { module, name } => Some((module, *name)),
+        Replacement::SourceModuleMoved { module, name } => Some((module, name.as_str())),
+        _ => None,
+    } {
+        if is_guarded_by_try_except(expr, module, name, semantic) {
+            return;
+        }
         diagnostic.try_set_fix(|| {
             let (import_edit, binding) = checker.importer().get_or_import_symbol(
                 &ImportRequest::import_from(module, name),

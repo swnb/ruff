@@ -897,12 +897,14 @@ impl<'src> Parser<'src> {
         self.bump(TokenKind::Nonlocal);
 
         // test_err nonlocal_stmt_trailing_comma
-        // nonlocal ,
-        // nonlocal x,
-        // nonlocal x, y,
+        // def _():
+        //     nonlocal ,
+        //     nonlocal x,
+        //     nonlocal x, y,
 
         // test_err nonlocal_stmt_expression
-        // nonlocal x + 1
+        // def _():
+        //     nonlocal x + 1
         let names = self.parse_comma_separated_list_into_vec(
             RecoveryContextKind::Identifiers,
             Parser::parse_identifier,
@@ -910,7 +912,8 @@ impl<'src> Parser<'src> {
 
         if names.is_empty() {
             // test_err nonlocal_stmt_empty
-            // nonlocal
+            // def _():
+            //     nonlocal
             self.add_error(
                 ParseErrorType::EmptyNonlocalNames,
                 self.current_token_range(),
@@ -918,8 +921,9 @@ impl<'src> Parser<'src> {
         }
 
         // test_ok nonlocal_stmt
-        // nonlocal x
-        // nonlocal x, y, z
+        // def _():
+        //     nonlocal x
+        //     nonlocal x, y, z
         ast::StmtNonlocal {
             range: self.node_range(start),
             names,
@@ -1123,10 +1127,10 @@ impl<'src> Parser<'src> {
         // a + b
 
         // test_err assign_stmt_invalid_value_expr
-        // x = *a and b
-        // x = *yield x
-        // x = *yield from x
-        // x = *lambda x: x
+        // x = (*a and b,)
+        // x = (42, *yield x)
+        // x = (42, *yield from x)
+        // x = (*lambda x: x,)
         // x = x := 1
 
         let mut value =
@@ -1577,25 +1581,50 @@ impl<'src> Parser<'src> {
                     ..
                 })
             ) {
-                // test_err except_stmt_unparenthesized_tuple
-                // try:
-                //     pass
-                // except x, y:
-                //     pass
-                // except x, y as exc:
-                //     pass
-                // try:
-                //     pass
-                // except* x, y:
-                //     pass
-                // except* x, y as eg:
-                //     pass
-                self.add_error(
-                    ParseErrorType::OtherError(
-                        "Multiple exception types must be parenthesized".to_string(),
-                    ),
-                    &parsed_expr,
-                );
+                if self.at(TokenKind::As) {
+                    // test_err except_stmt_unparenthesized_tuple_as
+                    // try:
+                    //     pass
+                    // except x, y as exc:
+                    //     pass
+                    // try:
+                    //     pass
+                    // except* x, y as eg:
+                    //     pass
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "Multiple exception types must be parenthesized when using `as`"
+                                .to_string(),
+                        ),
+                        &parsed_expr,
+                    );
+                } else {
+                    // test_err except_stmt_unparenthesized_tuple_no_as_py313
+                    // # parse_options: {"target-version": "3.13"}
+                    // try:
+                    //     pass
+                    // except x, y:
+                    //     pass
+                    // try:
+                    //     pass
+                    // except* x, y:
+                    //     pass
+
+                    // test_ok except_stmt_unparenthesized_tuple_no_as_py314
+                    // # parse_options: {"target-version": "3.14"}
+                    // try:
+                    //     pass
+                    // except x, y:
+                    //     pass
+                    // try:
+                    //     pass
+                    // except* x, y:
+                    //     pass
+                    self.add_unsupported_syntax_error(
+                        UnsupportedSyntaxErrorKind::UnparenthesizedExceptionTypes,
+                        parsed_expr.range(),
+                    );
+                }
             }
             Some(Box::new(parsed_expr.expr))
         } else {
