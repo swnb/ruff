@@ -81,7 +81,7 @@ use ruff_python_ast::{
 use ruff_python_trivia::CommentRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-mod error;
+pub mod error;
 pub mod lexer;
 mod parser;
 pub mod semantic_errors;
